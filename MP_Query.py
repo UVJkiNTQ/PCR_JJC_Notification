@@ -1,11 +1,15 @@
 import logging
+import sys
 import os
 import platform
-import sys
 import time
 import urllib3
 import requests
+import json
+import traceback
 from multiprocessing import Pool
+
+# 企业微信推送参照： https://github.com/AragonSnow/qiandao/blob/master/funcs.py#L149
 
 # 关闭验证警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -20,19 +24,18 @@ headers = {
 
 # 执行环境判断 建议统一使用secrets以免KEY泄露
 if platform.system() == 'Linux':
-    SCKEY = os.environ["SCKEY"]
-    UID_UNAME = os.environ["UID_UNAME"]
+    UID_UNAME = os.environ["UID_UNAME"].split(';')
+    qywx_token = os.environ["QYWX"]
 else:
-    SCKEY = 'SCT****'
     # ‘13位uid 用户名’ 中间用空格相隔
     UID_UNAME = {
         '************* 用户1',
         '************* 用户2'
     }
+    qywx_token = '企业ID;应用ID;应用密钥;'
 
 # api
 QUERY_API_ROOT = 'http://help.tencentbot.top'
-PUSH_API_ROOT = 'https://sctapi.ftqq.com'
 
 # 默认间隔
 LONG_INTERVAL = 180
@@ -48,10 +51,45 @@ logger_raw.addHandler(console_handler)
 
 
 # 推送
-def push_service(msg):
-    requests.post(
-        f'{PUSH_API_ROOT}/{SCKEY}.send', params=msg, headers=headers, verify=False)
-    logging.info('send message')
+def qywx_pusher_send(qywx_token, t, cont):
+    r = 'False'
+    try:
+        qywx = {}
+        tmp = qywx_token.split(';')
+        if len(tmp) >= 3:
+            qywx[u'企业ID'] = tmp[0]
+            qywx[u'应用ID'] = tmp[1]
+            qywx[u'应用密钥'] = tmp[2]
+        else:
+            raise Exception(u'企业微信token错误')
+        
+        get_access_token_res = requests.get('https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={id}&corpsecret={secret}'.format(id=qywx[u'企业ID'], secret=qywx[u'应用密钥']), 
+                            verify=False).json()
+        if (get_access_token_res['access_token'] != '' and get_access_token_res['errmsg'] == 'ok'):
+            msgUrl = 'https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={0}'.format(get_access_token_res['access_token'])
+            postData = {"touser" : "@all",
+                        "msgtype" : "news",
+                        "agentid" : qywx[u'应用ID'],
+                        "news" : {
+                            "articles" : [
+                                    {
+                                        "title" : t,
+                                        "description" : cont,
+                                        "url" : "URL"
+                                    }
+                                ]
+                        }
+            }
+            msg_res = requests.post(msgUrl, data=json.dumps(postData), verify=False)
+            tmp = msg_res.json()
+            if (tmp['errmsg'] == 'ok' and tmp['errcode'] == 0):
+                r = 'True'
+
+    except Exception as e:
+        r = traceback.format_exc()
+        print(r)
+    return r
+
 
 
 #
@@ -128,37 +166,36 @@ def on_arena_schedule(uid, uname):
 
     # 即时查询到的最新排名信息
     new_arena_ranks = int(data['data']['user_info']['arena_rank'])
+    print(new_arena_ranks)
     new_grand_arena_ranks = int(data['data']['user_info']['grand_arena_rank'])
+    print(new_grand_arena_ranks)
+    
 
     # jjc排名
-    if origin_arena_ranks >= new_arena_ranks:
+    if origin_arena_ranks == new_arena_ranks:
         origin_arena_ranks = new_arena_ranks
         logging.info(f'{uname}jjc:' + str(origin_arena_ranks))
 
     else:
         temp_arena_ranks = origin_arena_ranks
         origin_arena_ranks = new_arena_ranks
-        url_params = {
-            'title': f'{uname}:竞技场排名变化',
-            'desp': f'竞技场排名发生变化:{temp_arena_ranks}->{new_arena_ranks}'
-        }
-        logging.info(f'{uname}竞技场排名发生变化:{temp_arena_ranks}->{new_arena_ranks}')
-        push_service(url_params)
+        t =  f'{uname}:竞技场排名变化'
+        cont = f'竞技场排名发生变化:{temp_arena_ranks}->{new_arena_ranks}'
+        logging.info(f'{temp_arena_ranks}->{new_arena_ranks}')
+        qywx_pusher_send(qywx_token, t, cont)
 
     # pjjc排名
-    if origin_grand_arena_ranks >= new_grand_arena_ranks:
+    if origin_grand_arena_ranks == new_grand_arena_ranks:
         origin_grand_arena_ranks = new_grand_arena_ranks
         logging.info(f'{uname}pjjc:' + str(origin_grand_arena_ranks))
 
     else:
         temp_grand_arena_ranks = origin_grand_arena_ranks
         origin_grand_arena_ranks = new_grand_arena_ranks
-        url_params = {
-            'text': f'{uname}:公主竞技场排名变化',
-            'desp': f'公主竞技场排名发生变化：{temp_grand_arena_ranks}->{new_grand_arena_ranks}'
-        }
+        t = f'{uname}:公主竞技场排名变化'
+        cont = f'{temp_grand_arena_ranks}->{new_grand_arena_ranks}'
         logging.info(f'{uname}公主竞技场排名发生变化：{temp_grand_arena_ranks}->{new_grand_arena_ranks}')
-        push_service(url_params)
+        qywx_pusher_send(qywx_token, t, cont)
 
 
 def info_split(uid_str):
