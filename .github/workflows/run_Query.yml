@@ -25,6 +25,6 @@ jobs:
         run: pip install -r ./requirements.txt
       - name: '执行Query'
         env:
-          SCKEY: ${{ secrets.SCKEY }}
+          QYWX: ${{ secrets.QYWX }}
           UID: ${{ secrets.UID }}
         run: python ./Query.py
